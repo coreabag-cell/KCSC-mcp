@@ -65,20 +65,34 @@ curl -N -X POST "http://127.0.0.1:8123/mcp/?api_key=발급받은키" \
 ```
 `serverInfo.name: "kcsc-construction-code"` 가 포함된 응답이 오면 정상입니다.
 
-## 참고 — API 파라미터 정보 [확정: kcsc.re.kr 공식 API 문서 기준]
+## 참고 — API 파라미터 정보 [정정: 이전 버전의 쿼리파라미터 방식은 오류였습니다]
 
-- `Type`: `KDS` 또는 `KCS`
-- `Code`: 조회할 코드 번호 (예: `142010`)
-- `Key`: 발급받은 인증키
+이전 버전은 `Type`/`Code`/`Key`를 전부 대문자 쿼리파라미터로 보냈으나,
+이는 KCSC 공식 문서의 실제 요청 형식과 다릅니다. 실제 형식은 `Type`/`Code`가
+**URL 경로(path)**에 들어가고, 인증키는 소문자 `key` 쿼리파라미터입니다:
 
-원본 엔드포인트:
-- `GET https://kcsc.re.kr/OpenApi/CodeList` (목록/메타)
-- `GET https://kcsc.re.kr/OpenApi/CodeViewer` (본문)
+```
+GET https://kcsc.re.kr/OpenApi/CodeViewer/{Type}/{Code}?key=발급받은키
+GET https://kcsc.re.kr/OpenApi/CodeList/{Type}/{Code}?key=발급받은키
+```
+
+예: `https://kcsc.re.kr/OpenApi/CodeViewer/KCS/114010?key=본인의_KCSC_인증키`
+
+- `Type`: `KDS` 또는 `KCS` (경로 세그먼트)
+- `Code`: 조회할 코드 번호, 예: `142010` (경로 세그먼트)
+- `key`: 발급받은 인증키 (쿼리파라미터, **소문자**)
+
+이전 방식(전부 대문자 쿼리파라미터)으로 호출하면 `CodeList`는 필수 파라미터
+`key` 누락으로 HTTP 400을, `CodeViewer`는 경로가 매칭되지 않아 빈 응답을
+반환했습니다 — "커넥터가 연결이 안 된다"는 증상의 실제 원인이었습니다.
+`server.py`는 이제 경로 기반 형식으로 수정되었습니다.
 
 ## 주의사항 [요확인]
 
 - KCSC OpenAPI의 요청 한도(rate limit) 및 상업적 이용 조건은 발급 페이지의
   이용약관을 직접 확인하시기 바랍니다.
-- 코드 체계(대분류 → 세부코드) 탐색 로직은 실제 응답 구조를 몇 차례 조회해보시면서
-  `list_construction_codes`의 `code` 파라미터에 어떤 값을 넣어야 원하는 하위
-  목록이 나오는지 확인이 필요합니다 (문서상 예시는 대분류 6자리 코드 기준).
+- `list_construction_codes`(`CodeList`)도 `CodeViewer`와 동일한 경로 기반
+  형식(`/CodeList/{Type}/{Code}`)을 따른다고 가정하고 수정했습니다. 대분류만
+  넣었을 때(`code="14"` 등) 실제로 하위 목록이 반환되는지는 KCSC 공식 문서에
+  명시적 예시가 없어 실제 호출로 재확인이 필요합니다 (인증키 승인이 필요해
+  이 저장소 환경에서는 kcsc.re.kr에 직접 접속해 검증할 수 없었습니다).

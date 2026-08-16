@@ -29,6 +29,7 @@ from mcp.server.fastmcp import FastMCP, Context
 
 BASE_URL = "https://kcsc.re.kr/OpenApi"
 PORT = int(os.environ.get("PORT", 8000))
+VALID_DOC_TYPES = {"KDS", "KCS"}
 
 mcp = FastMCP(
     name="kcsc-construction-code",
@@ -54,6 +55,45 @@ def _missing_key_message() -> str:
     )
 
 
+async def _call_kcsc_api(endpoint: str, doc_type: str, code: str, api_key: str) -> str:
+    """KCSC OpenAPI를 호출합니다.
+
+    실제 엔드포인트는 Type/Code를 쿼리파라미터가 아니라 URL 경로에 받고
+    (예: /OpenApi/CodeViewer/KCS/114010), 인증키는 소문자 'key' 쿼리파라미터로
+    받습니다 (kcsc.re.kr 공식 API 문서의 예시 URL 기준). 과거 버전은 Type/Code/Key를
+    모두 대문자 쿼리파라미터로 보내서 CodeList는 400(필수 파라미터 'key' 누락),
+    CodeViewer는 라우팅이 맞지 않아 빈 응답을 받았습니다.
+    """
+    doc_type_upper = doc_type.upper()
+    if doc_type_upper not in VALID_DOC_TYPES:
+        return f"doc_type은 'KDS' 또는 'KCS'만 가능합니다 (입력값: '{doc_type}')."
+    if not code or not code.strip():
+        return "code 파라미터가 비어 있습니다. 조회할 코드 번호를 입력해주세요."
+
+    url = f"{BASE_URL}/{endpoint}/{doc_type_upper}/{code.strip()}"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
+            resp = await client.get(url, params={"key": api_key})
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            return (
+                f"KCSC API 오류 (status {e.response.status_code}, "
+                f"url={url}): {e.response.text[:500]}"
+            )
+        except httpx.RequestError as e:
+            return f"KCSC API 요청 실패 ({url}): {e}"
+
+    if not resp.text.strip():
+        return (
+            f"KCSC API가 빈 응답을 반환했습니다 (Type={doc_type_upper}, Code={code}). "
+            "다음을 확인해보세요: "
+            "1) kcsc.re.kr 마이페이지에서 인증키가 '승인완료' 상태인지, "
+            "2) 코드 번호가 실제 존재하는 코드인지 (오탈자·자릿수 확인), "
+            "3) 대분류만 아는 경우 정확한 세부 코드(fullCode)를 먼저 확인했는지."
+        )
+    return resp.text
+
+
 @mcp.tool()
 async def list_construction_codes(doc_type: str, code: str, ctx: Context) -> str:
     """국가건설기준(KDS/KCS) 코드 목록 및 메타정보를 조회합니다.
@@ -70,17 +110,7 @@ async def list_construction_codes(doc_type: str, code: str, ctx: Context) -> str
     if not api_key:
         return _missing_key_message()
 
-    params = {"Type": doc_type.upper(), "Code": code, "Key": api_key}
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        try:
-            resp = await client.get(f"{BASE_URL}/CodeList", params=params)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            return f"KCSC API 오류 (status {e.response.status_code}): {e.response.text[:500]}"
-        except httpx.RequestError as e:
-            return f"KCSC API 요청 실패: {e}"
-
-    return resp.text
+    return await _call_kcsc_api("CodeList", doc_type, code, api_key)
 
 
 @mcp.tool()
@@ -98,17 +128,7 @@ async def get_construction_code_detail(doc_type: str, code: str, ctx: Context) -
     if not api_key:
         return _missing_key_message()
 
-    params = {"Type": doc_type.upper(), "Code": code, "Key": api_key}
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        try:
-            resp = await client.get(f"{BASE_URL}/CodeViewer", params=params)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            return f"KCSC API 오류 (status {e.response.status_code}): {e.response.text[:500]}"
-        except httpx.RequestError as e:
-            return f"KCSC API 요청 실패: {e}"
-
-    return resp.text
+    return await _call_kcsc_api("CodeViewer", doc_type, code, api_key)
 
 
 # Render는 PORT 환경변수로 바인딩할 포트를 지정합니다 (위 FastMCP 생성자에서 반영됨).
